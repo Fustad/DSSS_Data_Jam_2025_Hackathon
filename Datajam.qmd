@@ -1,0 +1,267 @@
+---
+title: "DataJam"
+format: html
+editor: visual
+---
+
+## HOW DOES PRESSURE CHANGE THE SWING
+
+Quarto enables you to weave together content and executable code into a finished document. To learn more about Quarto see <https://quarto.org>.
+
+## Running Code
+
+When you click the **Render** button a document will be generated that includes both content and the output of embedded code. You can embed code like this:
+
+```{r}
+library(tidyverse)
+library(knitr)
+```
+
+
+```{r}
+```
+
+You can add options to executable code like this
+
+```{r}
+#| echo: false
+getwd()
+data <- read.csv("data/statcast_pitch_swing_data_20240402_20241030_with_arm_angle.csv")
+
+View(data)
+
+```
+
+The `echo: false` option disables the printing of code (only output is displayed).
+
+```{r}
+library(dplyr)
+
+library(dplyr)
+
+df <- data %>%
+  mutate(
+    across(c(bat_speed, swing_length, launch_speed, launch_angle,
+             release_speed, release_spin_rate, inning, balls, strikes,
+             outs_when_up, on_1b, on_2b, on_3b, bat_score, fld_score),
+           as.numeric),
+    on_1b = coalesce(on_1b, 0),
+    on_2b = coalesce(on_2b, 0),
+    on_3b = coalesce(on_3b, 0),
+    strikes = coalesce(strikes, 0),
+    inning = coalesce(inning, 0),
+    bat_score = coalesce(bat_score, 0),
+    fld_score = coalesce(fld_score, 0),
+    bat_score_diff = bat_score - fld_score,
+    close_game  = abs(bat_score_diff) <= 2,
+    late_inning = inning >= 7,
+    not_ahead   = bat_score_diff <= 0,
+    runners_on  = (on_1b > 0 | on_2b > 0 | on_3b > 0),
+    two_strike  = strikes == 2
+  ) %>%
+  mutate(across(c(close_game, late_inning, not_ahead, runners_on, two_strike),
+                ~replace_na(., FALSE))) %>%
+  mutate(
+    pressure_level = case_when(
+      late_inning & close_game & not_ahead & (runners_on | two_strike) ~ "High",
+      close_game | late_inning | runners_on | two_strike               ~ "Medium",
+      TRUE                                                             ~ "Low"
+    ),
+    pressure_level = factor(pressure_level, levels = c("Low","Medium","High"))
+  ) %>%
+  
+  filter(!is.na(bat_speed),
+         !is.na(swing_length),
+         bat_speed >= 20, bat_speed <= 100)
+
+# summary check
+df %>%
+  group_by(pressure_level) %>%
+  summarise(
+    avg_bat_speed    = mean(bat_speed, na.rm = TRUE),
+    avg_swing_length = mean(swing_length, na.rm = TRUE),
+    n = n()
+  ) %>%
+  print()
+```
+
+
+```{r}
+library(dplyr)
+library(gt)
+
+variables_table <- tribble(
+  ~"Variable",        ~"Description",
+  "bat_speed",        "Speed of the bat during swing (mph)",
+  "swing_length",     "Path length of the swing (ft)",
+  "launch_speed",     "Ball exit velocity off the bat (mph)",
+  "launch_angle",     "Ball launch angle (degrees)",
+  "release_speed",    "Pitch velocity thrown by pitcher (mph)",
+  "release_spin_rate","Pitch spin rate (rpm)",
+  "inning / balls / strikes / outs_when_up", "Game situation indicators",
+  "on_1b / on_2b / on_3b", "Binary flags for runners on base",
+  "bat_score / fld_score", "Team scores before pitch",
+  "bat_score_diff",   "Batter team score minus fielding team score",
+  "close_game",       "1 if score difference ≤ 2",
+  "losing_or_tied",   "1 if batter’s team is tied or behind",
+  "late_game",        "1 if inning ≥ 7",
+  "runners_on",       "1 if any base is occupied",
+  "two_outs",         "1 if there are two outs",
+  "two_strikes",      "1 if the batter has two strikes",
+  "pressure_raw",     "Sum of pressure indicators (0–6)",
+  "pressure_lvl",     "Categorized as Low / Medium / High pressure"
+)
+
+variables_table %>%
+  gt() %>%
+  tab_header(
+    title = md("**Key Variables Used in the Analysis**"),
+  ) %>%
+  cols_label(
+    Variable = md("**Variable Name**"),
+    Description = md("**Description**")
+  ) %>%
+  tab_style(
+    style = cell_text(weight = "bold", color = "#003366"),
+    locations = cells_column_labels(everything())
+  ) %>%
+  tab_options(
+    table.font.size = 14,
+    data_row.padding = px(8),
+    heading.align = "center",
+    table.align = "center",
+    table.border.top.color = "#003366",
+    table.border.bottom.color = "#003366",
+    row.striping.background_color = "#f8f9fa"
+  )
+
+```
+
+```{r}
+#anova test
+
+# one-way ANOVA for bat speed
+bat_speed_aov <- aov(bat_speed ~ pressure_level, data = data)
+summary(bat_speed_aov)
+
+# one-way ANOVA for swing length
+swing_length_aov <- aov(swing_length ~ pressure_level, data = data)
+summary(swing_length_aov)
+
+#mean bat differs significantly across pressure levels
+#swing length does differ significantly across pressure levels
+
+
+```
+```{r}
+#multi linear regression 
+lm_bat <- lm(bat_speed ~ pressure_level + release_speed + pitch_type + strikes + outs_when_up, data=data)
+summary(lm_bat)
+
+lm_swing <- lm(swing_length ~ pressure_level + release_speed + pitch_type + strikes + outs_when_up, data=data)
+summary(lm_swing)
+
+#The regression results show that game pressure significantly affects both bat speed and swing length, even after controlling for pitch type, pitch velocity, strike count, and outs. Compared to low-pressure situations, bat speed decreased by approximately 0.5 mph in medium pressure and 1.6 mph in high-pressure contexts. Swing length followed a similar pattern, shortening by about 0.04 units in medium pressure and 0.09 units in high pressure. These effects were highly significant (p < 0.001), suggesting that hitters modify their mechanics under stress—swinging slightly slower and more compactly to improve contact when the stakes are high. Other variables such as pitch speed, pitch type, and strike count also influenced swings, but pressure remained an independent predictor of mechanical change.
+
+```
+```{r}
+#logistic regression
+data$contact <- ifelse(data$events %in% c("single","double","triple","home_run"), 1, 0)
+glm(contact ~ pressure_level + release_speed + pitch_type, data=data, family=binomial)
+
+```
+```{r}
+ggplot(df, aes(bat_speed, swing_length, color = pressure_level)) +
+  geom_point(alpha = 0.25, size = 1) +
+  geom_smooth(method = "lm", se = FALSE, color = "black", linewidth = 0.9) +
+  labs(title = "Relationship Between Bat Speed and Swing Length",
+       subtitle = "Each color shows pressure level; black line = overall trend",
+       x = "Bat Speed (mph)", y = "Swing Length (ft)") +
+  scale_color_brewer(palette = "set1") 
+
+
+```
+
+
+```{r}
+ggplot(df, aes(pressure_level, bat_speed, fill = pressure_level)) +
+  stat_summary(fun = mean, geom = "bar", width = 0.6) +
+  stat_summary(fun.data = mean_cl_normal, geom = "errorbar", width = 0.2) +
+  labs(
+    title = "Regression: Bat Speed by Pressure Level",
+    subtitle = "Bars show mean predicted bat speed; error bars show 95% CI",
+    x = "Pressure Level", y = "Predicted Bat Speed (mph)"
+  ) +
+  scale_fill_manual(values = c("Low" = "#0072B2", "Medium" = "#E69F00", "High" = "#D55E00")) +
+  theme(legend.position = "none")
+```
+```{r}
+# --- Packages ---
+library(dplyr)
+
+# --- 0) Start from your cleaned df (assumes you already created df with pressure_lvl etc.) ---
+# If your working object is called `data`, swap it in below where df is referenced.
+
+model_df <- df %>%
+  select(
+    bat_speed,
+    pressure_level,          # factor Low/Medium/High
+    swing_length,
+    release_speed,
+    release_spin_rate,
+    balls, strikes, outs_when_up,
+    inning,
+    on_1b, on_2b, on_3b
+  ) %>%
+  # ensure correct types
+  mutate(
+    pressure_level = factor(pressure_level, levels = c("Low","Medium","High")),
+    on_1b = as.integer(on_1b > 0),
+    on_2b = as.integer(on_2b > 0),
+    on_3b = as.integer(on_3b > 0)
+  ) %>%
+  # drop rows with any remaining NAs in model fields
+  tidyr::drop_na()
+
+# --- 1) Train/test split (80/20) ---
+set.seed(4099183)
+n <- nrow(model_df)
+idx <- sample.int(n, size = floor(0.8 * n))
+train <- model_df[idx, ]
+test  <- model_df[-idx, ]
+
+# --- 2) Fit linear regression ---
+fit <- lm(
+  bat_speed ~ pressure_level + swing_length + release_speed + release_spin_rate +
+    balls + strikes + outs_when_up + inning +
+    on_1b + on_2b + on_3b,
+  data = train
+)
+
+# Model summary (coefficients, R^2 on training)
+summary(fit)
+
+# --- 3) Test-set predictions & metrics ---
+pred <- predict(fit, newdata = test)
+
+MSPE <- mean((test$bat_speed - pred)^2)
+RMSE <- sqrt(MSPE)
+MAE  <- mean(abs(test$bat_speed - pred))
+R2_test <- 1 - sum((test$bat_speed - pred)^2) / sum((test$bat_speed - mean(test$bat_speed))^2)
+
+cat(sprintf("\nTest metrics:\n MSPE = %.3f\n RMSE = %.3f\n MAE = %.3f\n R^2 (test) = %.3f\n",
+            MSPE, RMSE, MAE, R2_test))
+
+# --- 4) Quick diagnostics (optional) ---
+par(mfrow = c(1,3))
+plot(fit, which = 1)  # Residuals vs Fitted (linearity / homoscedasticity check)
+plot(fit, which = 2)  # Normal Q-Q (error normality)
+plot(fit, which = 3)  # Scale-Location (variance stability)
+par(mfrow = c(1,1))
+
+# --- 5) Optional: see pressure effects in coefficients ---
+# Coeffs for pressure_levelMedium/High are differences vs 'Low' (the baseline).
+coef(summary(fit))[grep("pressure_level", rownames(coef(summary(fit)))), ]
+
+```
+
