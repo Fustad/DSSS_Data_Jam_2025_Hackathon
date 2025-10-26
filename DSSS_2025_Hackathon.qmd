@@ -1,0 +1,170 @@
+---
+title: "DSSS 2025 hackathon"
+format: html
+editor: visual
+Author: Farzan Ustad
+---
+
+## Problem
+
+Does Pressure Change the Swing?
+
+score + inning pressure (a.k.a. clutch game situations).
+
+## Running Code
+
+When you click the **Render** button a document will be generated that includes both content and the output of embedded code. You can embed code like this:
+
+```{r}
+library(tidyverse)
+```
+
+Reading data into environment.
+
+```{r}
+#| echo: false
+all_data <- read.csv("~/Desktop/Hackathon/DSSS 2025 Hackathon/data/statcast_pitch_swing_data_20240402_20241030_with_arm_angle.csv")
+```
+
+Cleaning data
+
+```{r}
+#| echo: false
+# Data columns that we will neeed to solve our question
+columns_needed <- c(
+  # --- game context ---
+  "game_date",         # identify game
+  "inning",            # where we are in the game
+  "inning_topbot",     # top/bottom (helps identify home-team pressure)
+  
+  # --- scoring situation ---
+  "bat_score",         # batting team's runs before pitch
+  "fld_score",         # fielding team's runs before pitch
+  
+  # --- runners on base ---
+  "on_1b",             # runner on 1st base
+  "on_2b",             # runner on 2nd base
+  "on_3b",             # runner on 3rd base
+  
+  # --- count and outs ---
+  "balls",             # balls in current count
+  "strikes",           # strikes in current count
+  "outs_when_up",      # number of outs when batter up
+  
+  # --- swing mechanics (core metrics) ---
+  "bat_speed",         # bat speed
+  "swing_length",      # swing length
+  "launch_speed",      # contact power
+  "estimated_slg_using_speedangle"  # expected quality of contact
+)
+
+# Subsetting data to what we need
+data <- all_data |>
+  select(all_of(columns_needed))
+
+# Creating a pressure level system to identify if a team is in 'High', 'Medium', or 'Low' level of pressure. 
+data <- data |>
+  filter(!is.na(bat_speed), bat_speed >= 20, bat_speed <= 100) |>
+  filter(inning <= 9) |>
+  mutate(
+    bat_score_diff = bat_score - fld_score,
+    close_game     = as.integer(abs(bat_score_diff) <= 2),
+    losing_or_tied = as.integer(bat_score_diff <= 0),
+    late_game      = as.integer(inning >= 7),
+    runners_on     = as.integer(on_1b > 0 | on_2b > 0 | on_3b > 0),
+    two_outs       = as.integer(outs_when_up == 2),
+    two_strikes    = as.integer(strikes == 2),
+    pressure_raw = close_game + losing_or_tied + late_game +
+                   runners_on + two_outs + two_strikes,
+    pressure_lvl = case_when(
+      pressure_raw <= 2 ~ "Low",
+      pressure_raw <= 4 ~ "Medium",
+      TRUE ~ "High"
+    ) |> factor(levels=c("Low","Medium","High"))
+  )
+
+```
+
+```{r}
+# Creatign a summery table to show the mean values of bat_speed, swing_length, and launch_speed
+data |>
+  group_by(pressure_lvl) |>
+  summarise(
+    n = n(),
+    bat_speed_mean = mean(bat_speed, na.rm = TRUE),
+    swing_length_mean = mean(swing_length, na.rm = TRUE),
+    launch_speed_mean = mean(launch_speed, na.rm = TRUE)
+  )
+```
+
+Running an ANOVA test to see if our hypothesis gets rejected.
+
+$$
+H_0:\ \mu_{\text{Low}}=\mu_{\text{Medium}}=\mu_{\text{High}}
+$$
+
+$$
+H_1:\ \text{At least one } \mu \text{ differs among } \{\mu_{\text{Low}},\mu_{\text{Medium}},\mu_{\text{High}}\}.
+$$
+
+```{r}
+anova(lm(bat_speed ~ pressure_lvl, data=data))
+anova(lm(swing_length ~ pressure_lvl, data=data))
+```
+
+Because p\<0.05, we reject both H₀​.
+
+-   **Bat Speed:** Decreases slightly as game pressure increases (≈70.30 → 69.76 mph). This pattern suggests that hitters may **intentionally slow their swings** in high-pressure situations, prioritizing contact and control over raw power.
+
+-   **Swing Length:** Shows minimal variation (≈7.25 ft across all groups), indicating that hitters maintain **consistency** while subtly speed
+
+```{r}
+# Grouping the data by pressure level
+bat_speed_summary <- data |>
+  group_by(pressure_lvl) |>
+  summarise(mean_bat_speed = mean(bat_speed, na.rm = TRUE))
+
+# Plotting 
+ggplot(bat_speed_summary, aes(x = pressure_lvl, 
+                              y = mean_bat_speed, 
+                              fill = pressure_lvl)) +
+  geom_col(show.legend = FALSE) +
+  coord_cartesian(ylim = c(68.5, 70.5)) +
+  labs(
+    title = "Average Bat Speed by Game Pressure",
+    x = "Pressure Level",
+    y = "Bat Speed (mph)"
+  ) +
+  scale_fill_manual(values = c("Low" = "#4E79A7", "Medium" = "#F28E2B", "High" = "#E15759")) +
+  theme_minimal(base_size = 13)
+
+```
+
+Predicting bat speed based on presure during a game.
+
+After filtering to standard 9 innings and removing tiny groups, the pattern becomes clearer: bat speed slightly decreases as innings progress, especially under high-pressure conditions. This supports our hypothesis that players adjust for control in late, high-stress moments.
+
+```{r}
+library(ggplot2)
+library(dplyr)
+
+# Average bat speed by inning and pressure
+trend <- data %>%
+  group_by(inning, pressure_lvl) %>%
+  summarise(mean_bat_speed = mean(bat_speed, na.rm = TRUE), .groups = "drop")
+
+# Plot
+ggplot(trend, aes(x = inning, y = mean_bat_speed, color = pressure_lvl)) +
+  geom_line(size = 1.2) +
+  geom_point(size = 2) +
+  scale_color_manual(values = c("Low"="#4E79A7","Medium"="#F28E2B","High"="#E15759")) +
+  labs(
+    title = "Average Bat Speed Across Innings by Game Pressure",
+    subtitle = "Batters slightly reduce swing speed as pressure and innings increase",
+    x = "Inning", y = "Average Bat Speed (mph)",
+    color = "Pressure Level"
+  ) +
+  theme_minimal(base_size = 13)
+
+
+```
